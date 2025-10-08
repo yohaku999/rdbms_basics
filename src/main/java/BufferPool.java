@@ -1,51 +1,102 @@
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 
+/**
+ * ByteBuffer is used to accomplish direct_IO and clener code without extra memory copy.
+ * Callers of BufferPool should know anything about Frame. Transparent Access to pages on the healfile must be provided.
+ */
 public class BufferPool {
 
-    private static byte[] buffer;
+    private static List<ByteBuffer> frames;
     private static final int PAGE_SIZE_BYTES = 4096;
     private static final int STORAGE_BLOCK_SIZE = 4096;
 
     // let's say page directory is not saved inside buffer pool for now.
-    private static final Map<Integer, PageDirectoryEntry> pageDirectory = new HashMap<>();
-    private static final PageTable pageTable = new PageTable();
+    private static final PageDirectory pageDirectory = new PageDirectory();
+    private static PageTable pageTable = null;
     private static final HeapFile heapFile = new HeapFile();
 
+    private static final Logger logger = LogManager.getLogger(BufferPool.class);
     BufferPool(int bufferPoolSizeBytes){
-        BufferPool.buffer = new byte[bufferPoolSizeBytes];
-        // touch each memory so that physical memory are allocated.
-        for (int i = 0; i < BufferPool.buffer.length; i += BufferPool.STORAGE_BLOCK_SIZE) {
-            BufferPool.buffer[i] = 0;
+        ByteBuffer buffer = ByteBuffer.allocate(bufferPoolSizeBytes);
+
+        // Touch each block to ensure physical memory allocation
+        for (int i = 0; i < buffer.capacity(); i += STORAGE_BLOCK_SIZE) {
+            buffer.put(i, (byte) 0);
         }
+
+        // allocate buffer to ecah Frame.
+        BufferPool.frames = new ArrayList<>();
+        int frameNum = bufferPoolSizeBytes / PAGE_SIZE_BYTES;
+
+        for (int i = 0; i < frameNum; i++) {
+            ByteBuffer frameView = buffer.duplicate();
+            frameView.position(i * PAGE_SIZE_BYTES);
+            frameView.limit((i + 1) * PAGE_SIZE_BYTES);
+            ByteBuffer frameSlice = frameView.slice();
+            frames.add(frameSlice);
+        }
+
+        pageTable = new PageTable(frameNum);
 
         // TODO: load and save pageDirectory from disk.
     }
 
-    public ByteBuffer getFrame(int pageID){
+    public ByteBuffer getPage(int pageID){
+        logger.debug("get page " + pageID);
         if(!BufferPool.pageTable.isPageLoaded(pageID)){
+            logger.debug("was not loaded " + pageID);
             try {
-                BufferPool.loadPage(pageID);
+                BufferPool.loadPageOnBuffer(pageID);
             } catch (IOException e) {
                 throw new RuntimeException(
                         String.format("Failed to load page %d from heap file", pageID), e
                 );
             }
         }
-        int offset = pageTable.getFrameOffset(pageID);
-        // return pointer without memory copy.
-        return ByteBuffer.wrap(buffer, offset, BufferPool.PAGE_SIZE_BYTES);
+        int frameID = pageTable.getFrameID(pageID);
+        return frames.get(frameID);
     }
 
-    private static void loadPage(int pageID) throws IOException {
-        int bufferTargetOffset = BufferPool.pageTable.getFreeFrameID()*BufferPool.PAGE_SIZE_BYTES;
-        if (!BufferPool.pageDirectory.containsKey(pageID)){
-            throw new IllegalStateException(String.format("pageID %d not found on heap file.", pageID));
+    public ByteBuffer getNewPage(){
+        int pageID = BufferPool.pageDirectory.issueNewPage();
+        // since new page is required only for write, we can always return empty frame.
+        int frameID = BufferPool.pageTable.getFreeFrameID(pageID);
+        ByteBuffer frame = BufferPool.frames.get(frameID);
+        frame.clear();
+        return frame;
+    }
+
+    private static void loadPageOnBuffer(int pageID) throws IOException {
+        int frameID = BufferPool.pageTable.getFreeFrameID(pageID);
+        BufferPool.frames.get(frameID).clear();
+        BufferPool.heapFile.readPage(BufferPool.pageDirectory.getOffset(pageID), BufferPool.frames.get(frameID));
+    }
+
+    private static void writePageToStorage(int pageID) throws IOException {
+        int pageOffset = BufferPool.pageDirectory.getOffset(pageID);
+        int frameID = BufferPool.pageTable.getFrameID(pageID);
+        BufferPool.heapFile.writePage(pageOffset, frames.get(frameID));
+        BufferPool.pageTable.markPageClean(pageID);
+    }
+
+    private static void evictPage() throws IOException {
+        // TODO: implement eviction policy
+        // decide whitch page to evict.
+        int pageID = 0;
+        // TODO: write corresponding WAL data on disk.
+        // check if it is dirty
+        if(BufferPool.pageTable.isPageDirty(pageID)){
+            BufferPool.writePageToStorage(pageID);
+            BufferPool.pageTable.markPageClean(pageID);
         }
-        BufferPool.heapFile.copyOnBuffer(BufferPool.pageDirectory.get(pageID).offset, BufferPool.PAGE_SIZE_BYTES,bufferTargetOffset, BufferPool.buffer);
-        BufferPool.pageTable.afterPageLoad(pageID, bufferTargetOffset);
+        // write page to evict on disk
+        BufferPool.pageTable.openFrame(pageID);
     }
 
 }
