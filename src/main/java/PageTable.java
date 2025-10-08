@@ -9,13 +9,13 @@ import java.util.stream.Collectors;
 public class PageTable {
 
     private static final Logger logger = LogManager.getLogger(PageTable.class);
-    private static final Map<Integer, PageTableEntry> table = new HashMap<>();
+    private final Map<Integer, PageTableEntry> table = new HashMap<>();
 
     // TODO:これって後から変更したくないんだけどどう実装すればだっけ
-    private static int frameNum;
+    private int frameNum;
 
     PageTable(int frameNum){
-        PageTable.frameNum = frameNum;
+        this.frameNum = frameNum;
     }
 
     boolean isPageLoaded(int pageID){
@@ -33,7 +33,7 @@ public class PageTable {
         Set<Integer> usedFrameIDs = table.values().stream().filter(entry -> entry.isBeingUsed())
                 .map(PageTableEntry::frameID)
                 .collect(Collectors.toSet());
-        for (int frameID = 0; frameID < PageTable.frameNum; frameID++){
+        for (int frameID = 0; frameID < this.frameNum; frameID++){
             if(!usedFrameIDs.contains(frameID)){
                 // TODO: ここのfalseと外のclearを一致させないといけない。
                 table.put(pageID, new PageTableEntry(false, true, frameID, true));
