@@ -5,14 +5,15 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.OptionalInt;
 
 /**
  * ByteBuffer is used to accomplish direct_IO and clener code without extra memory copy.
- * Callers of BufferPool should know anything about Frame. Transparent Access to pages on the healfile must be provided.
+ * Callers of BufferPool should know anything about Frame. Transparent Access to pages on the healfile and othres must be provided.
  */
 public class BufferPool {
 
-    private final List<ByteBuffer> frames = new ArrayList<>();;
+    private final List<Frame> frames = new ArrayList<>();
     private static final int PAGE_SIZE_BYTES = 4096;
     private static final int STORAGE_BLOCK_SIZE = 4096;
 
@@ -38,8 +39,7 @@ public class BufferPool {
             ByteBuffer frameView = buffer.duplicate();
             frameView.position(i * PAGE_SIZE_BYTES);
             frameView.limit((i + 1) * PAGE_SIZE_BYTES);
-            ByteBuffer frameSlice = frameView.slice();
-            frames.add(frameSlice);
+            frames.add(new Frame(frameView.slice()));
         }
 
         pageTable = new PageTable(frameNum);
@@ -47,7 +47,7 @@ public class BufferPool {
         // TODO: load and save pageDirectory from disk.
     }
 
-    public ByteBuffer getPage(int pageID){
+    public Frame getPage(int pageID){
         logger.debug("get page " + pageID);
         if(!this.pageTable.isPageLoaded(pageID)){
             logger.debug("was not loaded " + pageID);
@@ -63,22 +63,33 @@ public class BufferPool {
         return frames.get(frameID);
     }
 
-    public ByteBuffer getNewPage(){
+    public Frame getNewPage() throws IOException {
         int pageID = this.pageDirectory.issueNewPage();
         // since new page is required only for write, we can always return empty frame.
-        int frameID = this.pageTable.getFreeFrameID(pageID);
-        ByteBuffer frame = this.frames.get(frameID);
+        OptionalInt frameID = this.pageTable.getFreeFrameID(pageID);
+        if (frameID.isEmpty()){
+            // TODO: have to deal with concurrency problem
+            this.evictPage();
+            frameID = this.pageTable.getFreeFrameID(pageID);
+        }
+        Frame frame = this.frames.get(frameID.getAsInt());
         frame.clear();
         return frame;
     }
 
     private void loadPageOnBuffer(int pageID) throws IOException {
-        int frameID = this.pageTable.getFreeFrameID(pageID);
-        this.frames.get(frameID).clear();
-        this.heapFile.readPage(this.pageDirectory.getOffset(pageID), this.frames.get(frameID));
+        OptionalInt frameID = this.pageTable.getFreeFrameID(pageID);
+        if (frameID.isEmpty()){
+            // TODO: have to deal with concurrency problem.まあでもどっちが先でも一旦問題ないのか。
+            this.evictPage();
+            frameID = this.pageTable.getFreeFrameID(pageID);
+        }
+        this.frames.get(frameID.getAsInt()).clear();
+        this.heapFile.readPage(this.pageDirectory.getOffset(pageID), this.frames.get(frameID.getAsInt()));
     }
 
-    private void writePageToStorage(int pageID) throws IOException {
+    private void writeFrameToStorage(int pageID) throws IOException {
+        logger.debug("writing page " + pageID + " storage");
         int pageOffset = this.pageDirectory.getOffset(pageID);
         int frameID = this.pageTable.getFrameID(pageID);
         this.heapFile.writePage(pageOffset, this.frames.get(frameID));
@@ -86,13 +97,14 @@ public class BufferPool {
     }
 
     private void evictPage() throws IOException {
-        // TODO: implement eviction policy
+        // TODO: implement eviction policy, which should be DIed in the end.
         // decide whitch page to evict.
         int pageID = 0;
+        logger.debug("evicting page " + pageID);
         // TODO: write corresponding WAL data on disk.
         // check if it is dirty
-        if(this.pageTable.isPageDirty(pageID)){
-            this.writePageToStorage(pageID);
+        if(this.pageTable.isFrameDirty(pageID)){
+            this.writeFrameToStorage(pageID);
             this.pageTable.markPageClean(pageID);
         }
         // write page to evict on disk

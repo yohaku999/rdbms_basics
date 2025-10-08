@@ -11,20 +11,31 @@ public class HeapFileTest {
 
     @Test
     void testWRToOffsetZero() throws IOException {
-        // create buffer to write
+        // create random bytes
         int page_size = 4096;
         byte[] bytes = new byte[page_size];
         Random random = new Random();
         random.nextBytes(bytes);
-        ByteBuffer buffer = ByteBuffer.wrap(bytes);
+
+        // write fo frame
+        ByteBuffer buffer = ByteBuffer.allocate(page_size);
+        Frame writeFrame = new Frame(buffer);
+        writeFrame.write(bytes);
+
 
         // write
         HeapFile file = new HeapFile();
-        file.writePage(0, buffer);
+        file.writePage(0, writeFrame);
 
-        // read and compare
-        ByteBuffer read_buffer = ByteBuffer.allocate(page_size);
-        file.readPage(0, read_buffer);
-        assertEquals(read_buffer,buffer);
+        // read
+        ByteBuffer readBuffer = ByteBuffer.allocate(page_size);
+        Frame readFrame = new Frame(readBuffer);
+        file.readPage(0, readFrame);
+
+        // compare
+        for (int i = 0; i < writeFrame.getBuffer().limit(); i++) {
+            assertEquals(writeFrame.getBuffer().get(i), readFrame.getBuffer().get(i));
+        }
+
     }
 }

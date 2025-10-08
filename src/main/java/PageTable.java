@@ -3,6 +3,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -21,7 +22,7 @@ public class PageTable {
     boolean isPageLoaded(int pageID){
         return table.containsKey(pageID) && table.get(pageID).onMemory;
     }
-    boolean isPageDirty(int pageID){
+    boolean isFrameDirty(int pageID){
         return table.get(pageID).isDirty();
     }
     void markPageClean(int pageID){
@@ -29,7 +30,7 @@ public class PageTable {
     }
 
     // pageID -> entryで値を持っているので空いているframeを見つけるのが面倒。連続したフレームを見つけるのも大変。
-    synchronized int getFreeFrameID(int pageID){
+    synchronized OptionalInt getFreeFrameID(int pageID){
         Set<Integer> usedFrameIDs = table.values().stream().filter(entry -> entry.isBeingUsed())
                 .map(PageTableEntry::frameID)
                 .collect(Collectors.toSet());
@@ -38,10 +39,10 @@ public class PageTable {
                 // TODO: ここのfalseと外のclearを一致させないといけない。
                 table.put(pageID, new PageTableEntry(false, true, frameID, true));
                 logger.debug("returning " + frameID + " as a free frame.");
-                return frameID;
+                return OptionalInt.of(frameID);
             }
         }
-        throw new RuntimeException("Currently no free frame exists in the buffer pool.");
+        return OptionalInt.empty();
     }
 
     int getFrameID(int pageID){

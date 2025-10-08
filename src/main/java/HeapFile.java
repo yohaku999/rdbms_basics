@@ -2,7 +2,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -41,22 +40,22 @@ public class HeapFile {
     /**
      * Read from file into a slice of the provided frame
      */
-    public void readPage(int readOffset, ByteBuffer buffer) throws IOException {
+    public void readPage(int readOffset, Frame buffer) throws IOException {
 
         int bytesRead = 0;
         while (bytesRead < PAGE_SIZE_BYTES) {
-            bytesRead += fileChannel.read(buffer, readOffset + bytesRead);
+            bytesRead += fileChannel.read(buffer.getBuffer(), readOffset + bytesRead);
         }
     }
 
     /**
      * Write a slice of the provided frame into file at disk offset
      */
-    public void writePage(int writeDiskOffset, ByteBuffer frame) throws IOException {
+    public void writePage(int writeDiskOffset, Frame frame) throws IOException {
         logger.debug("writing frame to file offset " + writeDiskOffset);
         int bytesWritten = 0;
         while (bytesWritten < PAGE_SIZE_BYTES) {
-            bytesWritten += fileChannel.write(frame, writeDiskOffset + bytesWritten);
+            bytesWritten += fileChannel.write(frame.getBuffer(), writeDiskOffset + bytesWritten);
         }
     }
 
