@@ -2,10 +2,14 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalInt;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * ByteBuffer is used to accomplish direct_IO and clener code without extra memory copy.
@@ -21,6 +25,8 @@ public class BufferPool {
     private final PageDirectory pageDirectory = new PageDirectory();
     private PageTable pageTable;
     private HeapFile heapFile;
+
+    private final Object glock = new Object();
 
     private static final Logger logger = LogManager.getLogger(BufferPool.class);
     BufferPool(int bufferPoolSizeBytes, HeapFile heapFile){
@@ -39,76 +45,109 @@ public class BufferPool {
             ByteBuffer frameView = buffer.duplicate();
             frameView.position(i * PAGE_SIZE_BYTES);
             frameView.limit((i + 1) * PAGE_SIZE_BYTES);
-            frames.add(new Frame(frameView.slice()));
+            frames.add(new Frame(frameView.slice(), i));
         }
 
-        pageTable = new PageTable(frameNum);
+        pageTable = new PageTable(frames);
 
         // TODO: load and save pageDirectory from disk.
     }
 
-    public Frame getPage(int pageID){
-        logger.debug("get page " + pageID);
-        if(!this.pageTable.isPageLoaded(pageID)){
-            logger.debug("was not loaded " + pageID);
-            try {
-                this.loadPageOnBuffer(pageID);
-            } catch (IOException e) {
-                throw new RuntimeException(
-                        String.format("Failed to load page %d from heap file", pageID), e
-                );
+    public Frame getPage(int pageID) throws IOException {
+        // OPTIMIZE:this method should run concurrently if pageIDs are independent.
+        Lock lock = getLockForPage(pageID);
+        lock.lock();
+        synchronized (glock){
+            if(this.pageTable.hasEvicted(pageID)) {
+                try {
+                    // TODO: do buffer pool user need to know if getting freem frame or freed frame?
+                    OptionalInt frameID = this.pageTable.getUnPinnedCleanFrameID(pageID);
+                    if (frameID.isEmpty()) {
+                        this.evictPage();
+                        frameID = this.pageTable.getUnPinnedCleanFrameID(pageID);
+                    }
+                    // this.frames.get(frameID.getAsInt()).clear();
+                    // 4kb単位なのでreadの時は上書きは不要なはず
+                    this.heapFile.readPage(this.pageDirectory.getOffset(pageID),
+                            this.frames.get(frameID.getAsInt()));
+                } finally {
+                    lock.unlock();
+                }
             }
+            int frameID = pageTable.getFrameID(pageID);
+            logger.debug("get page " + pageID + " on frameID " + frameID);
+            // TODO: ここも本当はpinが必要
+            frames.get(frameID).pin();
+            return frames.get(frameID);
         }
-        int frameID = pageTable.getFrameID(pageID);
-        return frames.get(frameID);
+    }
+
+    public void releasePage(int pageID){
+        int frameID = this.pageTable.getFrameID(pageID);
+        this.frames.get(frameID).unpin();
     }
 
     public Frame getNewPage() throws IOException {
         int pageID = this.pageDirectory.issueNewPage();
         // since new page is required only for write, we can always return empty frame.
-        OptionalInt frameID = this.pageTable.getFreeFrameID(pageID);
+        OptionalInt frameID = this.pageTable.getUnPinnedCleanFrameID(pageID);
         if (frameID.isEmpty()){
-            // TODO: have to deal with concurrency problem
+            // TODO: have to deal with concurrency problem and timing.
             this.evictPage();
-            frameID = this.pageTable.getFreeFrameID(pageID);
+            frameID = this.pageTable.getUnPinnedCleanFrameID(pageID);
         }
+        System.out.println("then here?");
         Frame frame = this.frames.get(frameID.getAsInt());
         frame.clear();
         return frame;
     }
 
-    private void loadPageOnBuffer(int pageID) throws IOException {
-        OptionalInt frameID = this.pageTable.getFreeFrameID(pageID);
-        if (frameID.isEmpty()){
-            // TODO: have to deal with concurrency problem.まあでもどっちが先でも一旦問題ないのか。
-            this.evictPage();
-            frameID = this.pageTable.getFreeFrameID(pageID);
-        }
-        this.frames.get(frameID.getAsInt()).clear();
-        this.heapFile.readPage(this.pageDirectory.getOffset(pageID), this.frames.get(frameID.getAsInt()));
+    private final ConcurrentHashMap<Integer, Lock> pageLocks = new ConcurrentHashMap<>();
+    private Lock getLockForPage(int pageID) {
+        return pageLocks.computeIfAbsent(pageID, id -> new ReentrantLock());
     }
 
     private void writeFrameToStorage(int pageID) throws IOException {
-        logger.debug("writing page " + pageID + " storage");
+        logger.debug("writing page " + pageID + " on storage");
         int pageOffset = this.pageDirectory.getOffset(pageID);
         int frameID = this.pageTable.getFrameID(pageID);
         this.heapFile.writePage(pageOffset, this.frames.get(frameID));
-        this.pageTable.markPageClean(pageID);
+        this.frames.get(frameID).clear();
+        // cleanというよりnot used
     }
 
     private void evictPage() throws IOException {
+        logger.debug("looking for frames to evict.");
         // TODO: implement eviction policy, which should be DIed in the end.
-        // decide whitch page to evict.
-        int pageID = 0;
-        logger.debug("evicting page " + pageID);
         // TODO: write corresponding WAL data on disk.
-        // check if it is dirty
-        if(this.pageTable.isFrameDirty(pageID)){
-            this.writeFrameToStorage(pageID);
-            this.pageTable.markPageClean(pageID);
+        // TODO: avoid busy wait.
+        for (int i = 0; i< 5; i++){
+            for (int frameID = 0; frameID < this.frames.size(); frameID++){
+                // always supposed to be dirty
+                if(!this.frames.get(frameID).pin()){
+                    continue;
+                }
+                if(this.frames.get(frameID).isDirty()){
+                    // ここでpageIDが-1になってしまう。frameIDを持つページが存在しないから。
+                    int pageID = this.pageTable.getPageID(frameID);
+                    logger.debug("evicting the frame " + frameID + " of page " + pageID);
+                    this.writeFrameToStorage(pageID);
+                    this.frames.get(frameID).clear();
+                    this.pageTable.clearFrameAllocation(pageID);
+                }else{
+                    logger.debug("no eviction because frame" + frameID + " is clean");
+                }
+                this.frames.get(frameID).unpin();
+                // ここでunpinしたせいでページを他の人にとられている。
+                return;
+            }
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
         }
-        // write page to evict on disk
-        this.pageTable.openFrame(pageID);
+        throw new RuntimeException("all frames are pinned. you should abort query.");
     }
 
 }

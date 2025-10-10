@@ -19,7 +19,7 @@ public class HeapFileTest {
 
         // write fo frame
         ByteBuffer buffer = ByteBuffer.allocate(page_size);
-        Frame writeFrame = new Frame(buffer);
+        Frame writeFrame = new Frame(buffer, 0);
         writeFrame.write(bytes);
 
 
@@ -29,7 +29,7 @@ public class HeapFileTest {
 
         // read
         ByteBuffer readBuffer = ByteBuffer.allocate(page_size);
-        Frame readFrame = new Frame(readBuffer);
+        Frame readFrame = new Frame(readBuffer, 1);
         file.readPage(0, readFrame);
 
         // compare
