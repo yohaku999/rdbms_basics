@@ -1,3 +1,5 @@
+package bufferpool;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.io.IOException;
@@ -13,7 +15,7 @@ import org.junit.jupiter.api.TestInstance;
 public class BufferPoolTest {
 
   private BufferPool bfp;
-  private int PAGE_SIZE = 4096;
+  private int PAGE_SIZE = BufferPool.PAGE_SIZE_BYTES;
 
   @BeforeEach
   void setUp() {
@@ -24,8 +26,8 @@ public class BufferPoolTest {
   // ensure it gets empty frame.
   void testGetNewPage() throws IOException {
     Frame frame = bfp.getNewPage();
-    for (int i = 0; i < frame.getBuffer().limit(); i++) {
-      assertEquals(0, frame.getBuffer().get(i));
+    for (int i = 0; i < frame.read().limit(); i++) {
+      assertEquals(0, frame.read().get(i));
     }
   }
 
@@ -41,14 +43,14 @@ public class BufferPoolTest {
       // convert to byte buffer
       // TODO: strange that I cannnot collect pageID from anywhare.
       Frame frame = bfp.getNewPage();
-      frame.write(bytes);
+      frame.append_bytes(bytes);
       frames.add(frame);
     }
 
     for (int pageID = 0; pageID < 2; pageID++) {
       Frame readBuffer = bfp.getPage(pageID);
-      for (int i = 0; i < frames.get(pageID).getBuffer().limit(); i++) {
-        assertEquals(frames.get(pageID).getBuffer().get(i), readBuffer.getBuffer().get(i));
+      for (int i = 0; i < frames.get(pageID).read().limit(); i++) {
+        assertEquals(frames.get(pageID).read().get(i), readBuffer.read().get(i));
       }
     }
   }
@@ -56,7 +58,7 @@ public class BufferPoolTest {
   //    @Test
   //    void testConcurrentWritePageToStorage() throws InterruptedException {
   //        int numPages = 5;
-  //        List<Frame> frames = new ArrayList<>();
+  //        List<bufferpool.Frame> frames = new ArrayList<>();
   //        ExecutorService executor = Executors.newFixedThreadPool(numPages);
   //        try{
   //            // write
@@ -65,7 +67,7 @@ public class BufferPoolTest {
   //                writeTasks.add(() -> {
   //                    byte[] bytes = new byte[PAGE_SIZE];
   //                    new Random().nextBytes(bytes);
-  //                    Frame frame = bfp.getNewPage();
+  //                    bufferpool.Frame frame = bfp.getNewPage();
   //                    frame.write(bytes);
   //                    synchronized (frames) {
   //                        frames.add(frame);
@@ -81,7 +83,7 @@ public class BufferPoolTest {
   //            for (int pageID = 0; pageID < numPages; pageID++) {
   //                final int pid = pageID;
   //                readTasks.add(() -> {
-  //                    Frame frame = bfp.getPage(pid);
+  //                    bufferpool.Frame frame = bfp.getPage(pid);
   //                    // byte buffer should be compared this way for comparing data.
   //                    for (int i = 0; i < frames.get(pid).getBuffer().limit(); i++) {
   //                        assertEquals(frames.get(pid).getBuffer().get(i),
@@ -102,7 +104,7 @@ public class BufferPoolTest {
   //    void testPageEvictionAndRead() throws InterruptedException {
   //        // 2 pages should be evicted, since there are only 8 frames in buffer pool.
   //        int numPages = 4;
-  //        List<Frame> frames = new ArrayList<>();
+  //        List<bufferpool.Frame> frames = new ArrayList<>();
   //        ExecutorService executor = Executors.newFixedThreadPool(numPages);
   //        try{
   //            // write to use full frames
@@ -113,7 +115,7 @@ public class BufferPoolTest {
   //                writeTasks.add(() -> {
   //                    byte[] bytes = new byte[PAGE_SIZE];
   //                    new Random().nextBytes(bytes);
-  //                    Frame frame = bfp.getNewPage();
+  //                    bufferpool.Frame frame = bfp.getNewPage();
   //                    frame.write(bytes);
   //                    frame.unpin();
   //                    synchronized (frames) {
@@ -136,7 +138,7 @@ public class BufferPoolTest {
   //                writeTasks.add(() -> {
   //                    byte[] bytes = new byte[PAGE_SIZE];
   //                    new Random().nextBytes(bytes);
-  //                    Frame frame = bfp.getNewPage();
+  //                    bufferpool.Frame frame = bfp.getNewPage();
   //                    frame.write(bytes);
   //                    frame.unpin();
   //                    synchronized (frames) {
@@ -158,7 +160,7 @@ public class BufferPoolTest {
   //            for (int pageID = 0; pageID < numPages; pageID++) {
   //                final int pid = pageID;
   //                readTasks.add(() -> {
-  //                    Frame readBuffer = bfp.getPage(pid);
+  //                    bufferpool.Frame readBuffer = bfp.getPage(pid);
   //                    // byte buffer should be compared this way for comparing data.
   //                    for (int i = 0; i < frames.get(pid).getBuffer().limit(); i++) {
   //                        assertEquals(frames.get(pid).getBuffer().get(i),

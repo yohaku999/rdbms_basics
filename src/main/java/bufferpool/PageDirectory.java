@@ -1,3 +1,5 @@
+package bufferpool;
+
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -22,9 +24,9 @@ public class PageDirectory {
   int issueNewPage() {
     int pageID = maxPageID.incrementAndGet();
     logger.debug("issued new pageID " + pageID);
-    // TODO: avoid magic number. unify the variavle with the on on BufferPool.
+    // TODO: avoid magic number. unify the variavle with the on on bufferpool.BufferPool.
     // TODO: let's say that page will be saved sequentially now.
-    this.directory.put(pageID, new PageDirectoryEntry(pageID * 4096));
+    this.directory.put(pageID, new PageDirectoryEntry(pageID * BufferPool.PAGE_SIZE_BYTES));
     return pageID;
   }
 

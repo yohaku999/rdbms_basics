@@ -1,3 +1,5 @@
+package bufferpool;
+
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
@@ -6,12 +8,12 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 /**
- * HeapFile should know nothing about page. Now using NIO with FileChannel to achieve block access.
+ * bufferpool.HeapFile should know nothing about page. Now using NIO with FileChannel to use
+ * ByteBuffer.
  */
 public class HeapFile {
 
   private static final String FILE_PATH = "./data/heap";
-  private static final int PAGE_SIZE_BYTES = 4096;
 
   // Keep FileChannel open while the system is running
   private final FileChannel fileChannel;
@@ -32,22 +34,8 @@ public class HeapFile {
     }
   }
 
-  /** Read from file into a slice of the provided frame */
-  public void readPage(int readOffset, Frame buffer) throws IOException {
-
-    int bytesRead = 0;
-    while (bytesRead < PAGE_SIZE_BYTES) {
-      bytesRead += fileChannel.read(buffer.getBuffer(), readOffset + bytesRead);
-    }
-  }
-
-  /** Write a slice of the provided frame into file at disk offset */
-  public void writePage(int writeDiskOffset, Frame frame) throws IOException {
-    logger.debug("writing frame to file offset " + writeDiskOffset);
-    int bytesWritten = 0;
-    while (bytesWritten < PAGE_SIZE_BYTES) {
-      bytesWritten += fileChannel.write(frame.getBuffer(), writeDiskOffset + bytesWritten);
-    }
+  FileChannel getFileChannel() {
+    return this.fileChannel;
   }
 
   public void close() throws IOException {

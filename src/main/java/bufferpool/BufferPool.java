@@ -1,3 +1,5 @@
+package bufferpool;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -10,21 +12,20 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 /**
- * Callers of BufferPool should know nothing about Frame. Transparent Access to pages on the
- * healfile and othres must be provided. ByteBuffer is used to accomplish direct_IO and clener code
- * without extra memory copy.
+ * Callers of bufferpool.BufferPool should know nothing about bufferpool.Frame. Transparent Access
+ * to pages on the healfile and othres must be provided. ByteBuffer is used to accomplish direct_IO
+ * and clener code without extra memory copy.
  */
 public class BufferPool {
 
   public static final int PAGE_SIZE_BYTES = 4096;
   private final List<Frame> frames = new ArrayList<>();
-
-  // let's say page directory is not saved inside buffer pool for now.
   private final PageDirectory pageDirectory = new PageDirectory();
   private PageTable pageTable;
   private HeapFile heapFile;
 
   private final Object glock = new Object();
+  private final ConcurrentHashMap<Integer, Lock> pageLocks = new ConcurrentHashMap<>();
 
   private static final Logger logger = LogManager.getLogger(BufferPool.class);
 
@@ -37,9 +38,8 @@ public class BufferPool {
       buffer.put(i, (byte) 0);
     }
 
-    // allocate buffer to ecah Frame.
+    // allocate buffer to ecah bufferpool.Frame.
     int frameNum = bufferPoolSizeBytes / PAGE_SIZE_BYTES;
-
     for (int i = 0; i < frameNum; i++) {
       ByteBuffer frameView = buffer.duplicate();
       frameView.position(i * PAGE_SIZE_BYTES);
@@ -47,13 +47,13 @@ public class BufferPool {
       frames.add(new Frame(frameView.slice(), i));
     }
 
-    pageTable = new PageTable(frames);
+    this.pageTable = new PageTable(frames);
 
     // TODO: load and save pageDirectory from disk.
   }
 
   public Frame getPage(int pageID) throws IOException {
-    // OPTIMIZE:this method should run concurrently if pageIDs are independent.
+    // BUG:concurreny control not implemented successfully.
     Lock lock = getLockForPage(pageID);
     lock.lock();
     synchronized (glock) {
@@ -65,25 +65,19 @@ public class BufferPool {
             this.evictPage();
             frameID = this.pageTable.getUnPinnedCleanFrameID(pageID);
           }
-          // this.frames.get(frameID.getAsInt()).clear();
-          // 4kb単位なのでreadの時は上書きは不要なはず
-          this.heapFile.readPage(
-              this.pageDirectory.getOffset(pageID), this.frames.get(frameID.getAsInt()));
+          // don't require padding, since page size = frame size
+          this.frames
+              .get(frameID.getAsInt())
+              .loadFrom(this.heapFile, this.pageDirectory.getOffset(pageID));
         } finally {
           lock.unlock();
         }
       }
       int frameID = pageTable.getFrameID(pageID);
       logger.debug("get page " + pageID + " on frameID " + frameID);
-      // TODO: ここも本当はpinが必要
       frames.get(frameID).pin();
       return frames.get(frameID);
     }
-  }
-
-  public void releasePage(int pageID) {
-    int frameID = this.pageTable.getFrameID(pageID);
-    this.frames.get(frameID).unpin();
   }
 
   public Frame getNewPage() throws IOException {
@@ -95,13 +89,10 @@ public class BufferPool {
       this.evictPage();
       frameID = this.pageTable.getUnPinnedCleanFrameID(pageID);
     }
-    System.out.println("then here?");
     Frame frame = this.frames.get(frameID.getAsInt());
     frame.clear();
     return frame;
   }
-
-  private final ConcurrentHashMap<Integer, Lock> pageLocks = new ConcurrentHashMap<>();
 
   private Lock getLockForPage(int pageID) {
     return pageLocks.computeIfAbsent(pageID, id -> new ReentrantLock());
@@ -111,9 +102,7 @@ public class BufferPool {
     logger.debug("writing page " + pageID + " on storage");
     int pageOffset = this.pageDirectory.getOffset(pageID);
     int frameID = this.pageTable.getFrameID(pageID);
-    this.heapFile.writePage(pageOffset, this.frames.get(frameID));
-    this.frames.get(frameID).clear();
-    // cleanというよりnot used
+    this.frames.get(frameID).writeToDisk(this.heapFile, pageOffset);
   }
 
   private void evictPage() throws IOException {
